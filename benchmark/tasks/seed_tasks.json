@@ -1,0 +1,119 @@
+[
+  {
+    "task_id": "add_numbers",
+    "task_type": "arithmetic",
+    "difficulty": "simple",
+    "benchmark_source": "hand_seeded",
+    "prompt": "Write a function `add(a, b)` that returns the sum of two numbers.",
+    "visible_test_code": "from solution import add\n\ndef test_positive():\n    assert add(2, 3) == 5\n\ndef test_zero():\n    assert add(0, 0) == 0\n",
+    "held_out_test_code": "from solution import add\n\ndef test_negative():\n    assert add(-1, -1) == -2\n\ndef test_mixed_sign():\n    assert add(-5, 10) == 5\n"
+  },
+  {
+    "task_id": "reverse_string",
+    "task_type": "string_manipulation",
+    "difficulty": "simple",
+    "benchmark_source": "hand_seeded",
+    "prompt": "Write a function `reverse_string(s)` that returns the input string reversed, without using slicing tricks like s[::-1] (use a loop or built-in reversed()).",
+    "visible_test_code": "from solution import reverse_string\n\ndef test_basic():\n    assert reverse_string('hello') == 'olleh'\n",
+    "held_out_test_code": "from solution import reverse_string\n\ndef test_empty():\n    assert reverse_string('') == ''\n\ndef test_palindrome():\n    assert reverse_string('racecar') == 'racecar'\n\ndef test_single_char():\n    assert reverse_string('x') == 'x'\n"
+  },
+  {
+    "task_id": "fibonacci_memo",
+    "task_type": "recursion_dp",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded",
+    "prompt": "Write a function `fib(n)` that returns the nth Fibonacci number (fib(0)=0, fib(1)=1), using memoization so it runs in O(n) time, not exponential.",
+    "visible_test_code": "from solution import fib\n\ndef test_base_cases():\n    assert fib(0) == 0\n    assert fib(1) == 1\n",
+    "held_out_test_code": "from solution import fib\n\ndef test_known_values():\n    assert fib(10) == 55\n    assert fib(20) == 6765\n\ndef test_larger_value_runs_fast():\n    # Would hang/time out on naive exponential recursion without memoization.\n    assert fib(35) == 9227465\n"
+  },
+  {
+    "task_id": "dedupe_preserve_order",
+    "task_type": "data_structures",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded",
+    "prompt": "Write a function `dedupe(items)` that removes duplicate elements from a list while preserving the original order of first occurrence.",
+    "visible_test_code": "from solution import dedupe\n\ndef test_basic():\n    assert dedupe([1, 2, 2, 3, 1]) == [1, 2, 3]\n\ndef test_no_dupes():\n    assert dedupe([1, 2, 3]) == [1, 2, 3]\n",
+    "held_out_test_code": "from solution import dedupe\n\ndef test_all_same():\n    assert dedupe([5, 5, 5]) == [5]\n\ndef test_empty():\n    assert dedupe([]) == []\n\ndef test_preserves_order_not_sorted():\n    assert dedupe([3, 1, 3, 2, 1]) == [3, 1, 2]\n"
+  },
+  {
+    "task_id": "thread_safe_counter",
+    "task_type": "concurrency",
+    "difficulty": "hard",
+    "benchmark_source": "hand_seeded",
+    "prompt": "Write a class `SafeCounter` with methods `increment()` and `value()`. It must be safe to call `increment()` from multiple threads concurrently without losing updates (use threading.Lock).",
+    "visible_test_code": "import threading\nfrom solution import SafeCounter\n\ndef test_concurrent_increments():\n    counter = SafeCounter()\n    threads = [threading.Thread(target=lambda: [counter.increment() for _ in range(1000)]) for _ in range(10)]\n    for t in threads:\n        t.start()\n    for t in threads:\n        t.join()\n    assert counter.value() == 10000\n",
+    "held_out_test_code": "from solution import SafeCounter\n\ndef test_initial_value_is_zero():\n    counter = SafeCounter()\n    assert counter.value() == 0\n\ndef test_single_increment():\n    counter = SafeCounter()\n    counter.increment()\n    assert counter.value() == 1\n"
+  },
+  {
+    "task_id": "rotate_left",
+    "task_type": "array_manipulation",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `rotate_left(items, k)` that rotates the list `items` to the left by `k` positions and returns the new list. `k` can be larger than the length of the list, or zero.",
+    "visible_test_code": "from solution import rotate_left\n\ndef test_basic():\n    assert rotate_left([1, 2, 3, 4, 5], 2) == [3, 4, 5, 1, 2]\n",
+    "held_out_test_code": "from solution import rotate_left\n\ndef test_zero_rotation():\n    assert rotate_left([1, 2, 3], 0) == [1, 2, 3]\n\ndef test_full_rotation():\n    assert rotate_left([1, 2, 3], 3) == [1, 2, 3]\n\ndef test_k_larger_than_length():\n    assert rotate_left([1, 2, 3], 4) == [2, 3, 1]\n\ndef test_empty_list():\n    assert rotate_left([], 5) == []\n"
+  },
+  {
+    "task_id": "make_multipliers",
+    "task_type": "closures_scoping",
+    "difficulty": "hard",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `make_multipliers(n)` that returns a list of `n` functions. The i-th function (0-indexed) takes one argument `x` and returns `x * i`. For example, with n=3: the first function returns 0 for any x, the second returns x*1, the third returns x*2.",
+    "visible_test_code": "from solution import make_multipliers\n\ndef test_length_and_first():\n    funcs = make_multipliers(3)\n    assert len(funcs) == 3\n    assert funcs[0](5) == 0\n",
+    "held_out_test_code": "from solution import make_multipliers\n\ndef test_distinct_multipliers():\n    funcs = make_multipliers(3)\n    assert funcs[1](5) == 5\n    assert funcs[2](5) == 10\n\ndef test_larger_n():\n    funcs = make_multipliers(5)\n    assert [f(2) for f in funcs] == [0, 2, 4, 6, 8]\n"
+  },
+  {
+    "task_id": "safe_average",
+    "task_type": "edge_case_handling",
+    "difficulty": "simple",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `average(nums)` that returns the average of a list of numbers. If the list is empty, return None instead of raising an error.",
+    "visible_test_code": "from solution import average\n\ndef test_basic():\n    assert average([2, 4, 6]) == 4\n",
+    "held_out_test_code": "from solution import average\n\ndef test_empty_returns_none():\n    assert average([]) is None\n\ndef test_single_element():\n    assert average([5]) == 5.0\n\ndef test_negative_numbers():\n    assert average([-2, 2]) == 0\n"
+  },
+  {
+    "task_id": "binary_search",
+    "task_type": "algorithms_search",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `binary_search(sorted_list, target)` that returns the index of `target` in `sorted_list`, or -1 if not found. `sorted_list` is sorted ascending. Must run in O(log n) time, not a linear scan.",
+    "visible_test_code": "from solution import binary_search\n\ndef test_basic_found():\n    assert binary_search([1, 3, 5, 7, 9], 5) == 2\n",
+    "held_out_test_code": "from solution import binary_search\n\ndef test_leftmost_boundary():\n    assert binary_search([1, 3, 5, 7, 9], 1) == 0\n\ndef test_rightmost_boundary():\n    assert binary_search([1, 3, 5, 7, 9], 9) == 4\n\ndef test_not_found_between_elements():\n    assert binary_search([1, 3, 5, 7, 9], 4) == -1\n\ndef test_empty_list():\n    assert binary_search([], 5) == -1\n"
+  },
+  {
+    "task_id": "merge_intervals",
+    "task_type": "intervals_scheduling",
+    "difficulty": "hard",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `merge_intervals(intervals)` that takes a list of [start, end] pairs (not necessarily sorted) and returns a list of merged, non-overlapping intervals, sorted by start. Two intervals that only touch at the boundary (e.g. [1,3] and [3,5]) should be merged into one.",
+    "visible_test_code": "from solution import merge_intervals\n\ndef test_basic_overlap():\n    assert merge_intervals([[1, 3], [2, 6]]) == [[1, 6]]\n",
+    "held_out_test_code": "from solution import merge_intervals\n\ndef test_touching_boundary_merges():\n    assert merge_intervals([[1, 3], [3, 5]]) == [[1, 5]]\n\ndef test_unsorted_non_overlapping():\n    assert merge_intervals([[5, 6], [1, 2]]) == [[1, 2], [5, 6]]\n\ndef test_empty_input():\n    assert merge_intervals([]) == []\n"
+  },
+  {
+    "task_id": "flatten_nested",
+    "task_type": "recursion",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `flatten(nested)` that takes a list which may contain arbitrarily nested lists (any depth) and returns a single flat list of all non-list elements, in order.",
+    "visible_test_code": "from solution import flatten\n\ndef test_one_level():\n    assert flatten([1, [2, 3]]) == [1, 2, 3]\n",
+    "held_out_test_code": "from solution import flatten\n\ndef test_deep_nesting():\n    assert flatten([1, [2, [3, [4, [5]]]]]) == [1, 2, 3, 4, 5]\n\ndef test_empty_list():\n    assert flatten([]) == []\n\ndef test_empty_nested_lists():\n    assert flatten([1, [], [2]]) == [1, 2]\n"
+  },
+  {
+    "task_id": "is_clean_palindrome",
+    "task_type": "string_manipulation",
+    "difficulty": "simple",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `is_clean_palindrome(s)` that returns True if the string `s` is a palindrome when ignoring case, spaces, and punctuation (only consider alphanumeric characters).",
+    "visible_test_code": "from solution import is_clean_palindrome\n\ndef test_simple_palindrome():\n    assert is_clean_palindrome('racecar') == True\n",
+    "held_out_test_code": "from solution import is_clean_palindrome\n\ndef test_with_punctuation_and_case():\n    assert is_clean_palindrome('A man, a plan, a canal: Panama') == True\n\ndef test_non_palindrome():\n    assert is_clean_palindrome('hello') == False\n\ndef test_empty_string():\n    assert is_clean_palindrome('') == True\n"
+  },
+  {
+    "task_id": "majority_element",
+    "task_type": "algorithms_counting",
+    "difficulty": "medium",
+    "benchmark_source": "hand_seeded_adversarial",
+    "prompt": "Write a function `majority_element(nums)` that returns the element that appears more than len(nums)//2 times in the list, or None if no such element exists.",
+    "visible_test_code": "from solution import majority_element\n\ndef test_clear_majority():\n    assert majority_element([3, 3, 4]) == 3\n",
+    "held_out_test_code": "from solution import majority_element\n\ndef test_no_majority_returns_none():\n    assert majority_element([1, 2, 3]) is None\n\ndef test_single_element():\n    assert majority_element([1]) == 1\n\ndef test_larger_list():\n    assert majority_element([2, 2, 1, 1, 1, 2, 2]) == 2\n"
+  }
+]

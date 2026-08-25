@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: praxis_postgres
+    environment:
+      POSTGRES_USER: praxis
+      POSTGRES_PASSWORD: praxis_dev_only
+      POSTGRES_DB: praxis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: praxis_redis
+    ports:
+      - "6379:6379"
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: praxis_orchestrator
+    environment:
+      POSTGRES_DSN: postgresql://praxis:praxis_dev_only@postgres:5432/praxis
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_HOST: http://host.docker.internal:11434
+      KUZU_DB_PATH: /data/kuzu_db
+      SANDBOX_IMAGE: praxis-sandbox-runner
+    volumes:
+      - ./graph/kuzu_db:/data/kuzu_db
+      - /var/run/docker.sock:/var/run/docker.sock   # lets orchestrator launch sandbox containers
+      - ./benchmark:/app/benchmark:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  pg_data:
+
+# NOTE on Ollama:
+# Ollama is intentionally NOT containerized here. Run it natively on the host
+# (`ollama serve`) so it has direct GPU access. The orchestrator container reaches
+# it via host.docker.internal. This is the simplest zero-cost path on a single
+# GPU machine — containerizing Ollama with GPU passthrough adds complexity for
+# no benefit at this stage.
