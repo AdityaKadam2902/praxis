@@ -1,0 +1,16 @@
+# Ephemeral, locked-down execution image for agent-produced code.
+# Built once, then spun up/torn down per task by executor.py.
+
+FROM python:3.11-slim
+
+# Common test/lint deps for benchmark tasks (HumanEval/MBPP-style + general Python).
+RUN pip install --no-cache-dir pytest==8.2.0 --break-system-packages
+
+# Non-root user — agent code never runs as root, even inside the sandbox.
+RUN useradd --create-home --shell /bin/bash runner
+USER runner
+WORKDIR /home/runner/task
+
+# No CMD/ENTRYPOINT — executor.py supplies the exact command per run
+# (e.g. `pytest -q`) via `docker run`. Keeping this image command-less
+# keeps it a pure execution substrate, not a fixed pipeline.
