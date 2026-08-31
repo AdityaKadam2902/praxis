@@ -1,26 +1,28 @@
 """
-sandbox/executor.py
+sandbox/repo_executor.py
 
-The piece everything else in Praxis depends on: turns "the agent says it wrote
-working code" into "the code ran, here is exactly what happened."
+Repo-level grounding, Docker variant — same isolation approach as
+executor.py (network-less, resource-capped, non-root), but mounts an
+already-prepared repo directory (git_ops.write_files + commit already
+done) instead of writing a single solution+test pair into a fresh temp
+dir.
 
-Design constraints (deliberate, for Phase 0):
-  - No network access for the running code (`network_mode="none"`)
-  - Hard CPU / memory caps
-  - Hard wall-clock timeout
-  - Runs as non-root (baked into the sandbox image itself)
-  - Container is destroyed immediately after, win or lose — nothing persists
+Reuses the same sandbox image built in Phase 0 (praxis-sandbox-runner) —
+it only needs Python + pytest, which the current seed repo doesn't
+exceed. If a future seed repo needs its own dependencies (a
+requirements.txt), the image or a dependency-install step will need to
+grow to match — not handled yet, flagged here rather than silently
+assumed away.
 
-This module has exactly one job: given a task's source code + test file,
-return a structured, honest result. It does not talk to any LLM. That's
-what makes its output trustworthy as the "outcome" signal in calibration —
-it's the one part of the pipeline with no model in the loop.
+Note: this path (PRAXIS_SANDBOX=docker) hasn't been exercised in this
+project yet — development has stayed on the local/no-Docker path so far,
+same as Phase 0's original executor.py. Written to the same standard and
+following the exact pattern that's already proven out in executor.py,
+but worth an explicit test run before relying on it.
 """
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -28,20 +30,15 @@ from pathlib import Path
 import docker
 from docker.errors import ContainerError, ImageNotFound, APIError
 
-from sandbox.pytest_output import parse_pytest_output
 from sandbox.result import ExecutionResult, SANDBOX_IMAGE
+from sandbox.pytest_output import parse_pytest_output
 
-DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_MEMORY_LIMIT = "512m"
-DEFAULT_CPU_LIMIT = 1.0  # number of CPUs
+DEFAULT_CPU_LIMIT = 1.0
 
 
-class SandboxExecutor:
-    """
-    Thin wrapper around the Docker SDK that runs one task per call and
-    guarantees cleanup even on crash/timeout.
-    """
-
+class RepoSandboxExecutor:
     def __init__(
         self,
         image: str = SANDBOX_IMAGE,
@@ -66,32 +63,24 @@ class SandboxExecutor:
     def run(
         self,
         task_id: str,
-        solution_code: str,
-        test_code: str,
-        solution_filename: str = "solution.py",
-        test_filename: str = "test_solution.py",
+        repo_dir: str,
+        test_command: list[str] | None = None,
     ) -> ExecutionResult:
-        """
-        Write the agent's solution + the task's held-out tests to a temp dir,
-        mount it read-write into a throwaway container, run pytest, capture
-        everything, and tear the container down — regardless of outcome.
-        """
-        work_dir = Path(tempfile.mkdtemp(prefix=f"praxis_{task_id}_"))
+        command = test_command or ["pytest", "-q"]
         container = None
         start = time.monotonic()
 
         try:
-            (work_dir / solution_filename).write_text(solution_code, encoding="utf-8")
-            (work_dir / test_filename).write_text(test_code, encoding="utf-8")
-
-            container_name = f"praxis-run-{uuid.uuid4().hex[:10]}"
+            container_name = f"praxis-repo-run-{uuid.uuid4().hex[:10]}"
 
             container = self.client.containers.run(
                 image=self.image,
                 name=container_name,
-                command=["pytest", "-q", test_filename],
+                command=command,
                 working_dir="/home/runner/task",
-                volumes={str(work_dir): {"bind": "/home/runner/task", "mode": "rw"}},
+                volumes={
+                    str(Path(repo_dir).resolve()): {"bind": "/home/runner/task", "mode": "rw"}
+                },
                 network_mode="none",
                 mem_limit=self.memory_limit,
                 nano_cpus=int(self.cpu_limit * 1e9),
@@ -106,8 +95,6 @@ class SandboxExecutor:
                 exit_status = container.wait(timeout=self.timeout_seconds)
                 exit_code = exit_status.get("StatusCode")
             except Exception:
-                # docker-py raises on client-side timeout; the container may
-                # still be running on the daemon side, so force-kill it.
                 timed_out = True
                 exit_code = None
                 try:
@@ -115,10 +102,8 @@ class SandboxExecutor:
                 except APIError:
                     pass
 
-            logs = container.logs(stdout=True, stderr=True).decode(
-                "utf-8", errors="replace"
-            )
-            stdout, stderr = logs, ""  # docker-py interleaves by default here
+            logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+            stdout = logs
 
             collected, passed, failed = parse_pytest_output(stdout)
 
@@ -126,7 +111,7 @@ class SandboxExecutor:
                 task_id=task_id,
                 exit_code=exit_code,
                 stdout=stdout,
-                stderr=stderr,
+                stderr="",
                 wall_time_seconds=time.monotonic() - start,
                 tests_collected=collected,
                 tests_passed=passed,
@@ -143,7 +128,7 @@ class SandboxExecutor:
                 wall_time_seconds=time.monotonic() - start,
                 container_error=str(exc),
             )
-        except Exception as exc:  # noqa: BLE001 — Phase 0: capture everything, refine later
+        except Exception as exc:  # noqa: BLE001 — mirror executor.py's fail-safe behavior
             return ExecutionResult(
                 task_id=task_id,
                 exit_code=None,
@@ -158,22 +143,3 @@ class SandboxExecutor:
                     container.remove(force=True)
                 except APIError:
                     pass
-            shutil.rmtree(work_dir, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    # Smoke test — run directly (`python executor.py`) after building the image.
-    executor = SandboxExecutor()
-
-    solution = "def add(a, b):\n    return a + b\n"
-    tests = (
-        "from solution import add\n\n"
-        "def test_add_positive():\n    assert add(2, 3) == 5\n\n"
-        "def test_add_negative():\n    assert add(-1, -1) == -2\n"
-    )
-
-    result = executor.run(task_id="smoke_test_001", solution_code=solution, test_code=tests)
-    print(f"succeeded={result.succeeded} pass_fraction={result.pass_fraction:.2f}")
-    print(f"tests: {result.tests_passed}/{result.tests_collected} passed")
-    print("--- stdout ---")
-    print(result.stdout)

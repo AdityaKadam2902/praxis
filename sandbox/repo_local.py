@@ -1,44 +1,36 @@
 """
-sandbox/local_executor.py
+sandbox/repo_local.py
 
-Fallback for when Docker isn't set up yet. Runs the same pytest command
-executor.py runs, but directly on the host — no container, no network
-isolation, no resource caps, no non-root sandboxing.
+Repo-level grounding, no-Docker variant — mirrors local_executor.py's
+pattern, but operates on an already-prepared repo directory (files
+already written via git_ops.write_files, already committed on a branch)
+instead of a single solution+test string pair. This is what closes
+Phase 2 gap #1 from the build spec: QA needs to run a seed repo's own
+test suite after a multi-file change, not just one function against one
+test file.
 
-Same ExecutionResult output shape as SandboxExecutor, so run_benchmark.py
-can use either one interchangeably via sandbox/factory.py.
-
-⚠️ Not a substitute for SandboxExecutor long-term. This is safe for running
-YOUR OWN seed tasks (you already trust that code — you wrote it). It stops
-being safe the moment agent-generated code you haven't reviewed runs
-through it, since there's nothing stopping that code from touching the
-network, the filesystem outside the temp dir, or anything else on your
-machine. Switch back to the Docker-based executor before Phase 1+ work
-involves code you haven't read yet.
+Same isolation caveat as local_executor.py: runs directly on the host,
+no network block, no resource caps. Fine for a seed repo you wrote
+yourself; switch to repo_executor.py (Docker) before running anything
+containing code you haven't reviewed.
 """
 
 from __future__ import annotations
 
-import shutil
 import subprocess
-import tempfile
 import time
-from pathlib import Path
 
 from sandbox.result import ExecutionResult
 from sandbox.pytest_output import parse_pytest_output
 
-DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT_SECONDS = 60  # repo-level suites take longer than a single function's tests
 
 
 def _coerce_text(value: bytes | str | None) -> str:
-    """
-    subprocess.TimeoutExpired.stdout/.stderr are typed as bytes | Any | None
-    since the type checker can't see that text=True was passed to
-    subprocess.run() above — so this handles both cases explicitly instead
-    of relying on an implicit guarantee that could silently break if the
-    subprocess call ever changes.
-    """
+    """Same reasoning as local_executor.py's helper of the same name —
+    subprocess.TimeoutExpired.stdout/.stderr are typed generically, this
+    handles both bytes and str explicitly rather than assuming text=True
+    always held."""
     if value is None:
         return ""
     if isinstance(value, bytes):
@@ -46,29 +38,32 @@ def _coerce_text(value: bytes | str | None) -> str:
     return value
 
 
-class LocalExecutor:
+class RepoLocalExecutor:
     def __init__(self, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
         self.timeout_seconds = timeout_seconds
 
     def run(
         self,
         task_id: str,
-        solution_code: str,
-        test_code: str,
-        solution_filename: str = "solution.py",
-        test_filename: str = "test_solution.py",
+        repo_dir: str,
+        test_command: list[str] | None = None,
     ) -> ExecutionResult:
-        work_dir = Path(tempfile.mkdtemp(prefix=f"praxis_local_{task_id}_"))
+        """
+        Run `test_command` (default ["pytest", "-q"]) inside repo_dir,
+        which is expected to already have Engineer's changes written and
+        committed before this is called. Returns the same ExecutionResult
+        shape Phase 0 used for single-function tasks — calibration code
+        downstream doesn't need to know whether it's grounding one
+        function or a whole repo.
+        """
+        command = test_command or ["pytest", "-q"]
         start = time.monotonic()
 
         try:
-            (work_dir / solution_filename).write_text(solution_code, encoding="utf-8")
-            (work_dir / test_filename).write_text(test_code, encoding="utf-8")
-
             try:
                 proc = subprocess.run(
-                    ["pytest", "-q", test_filename],
-                    cwd=work_dir,
+                    command,
+                    cwd=repo_dir,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -97,7 +92,7 @@ class LocalExecutor:
                 timed_out=timed_out,
             )
 
-        except Exception as exc:  # noqa: BLE001 — mirror executor.py's fail-safe behavior
+        except Exception as exc:  # noqa: BLE001 — mirror local_executor.py's fail-safe behavior
             return ExecutionResult(
                 task_id=task_id,
                 exit_code=None,
@@ -106,5 +101,3 @@ class LocalExecutor:
                 wall_time_seconds=time.monotonic() - start,
                 container_error=str(exc),
             )
-        finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
