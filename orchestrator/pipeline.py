@@ -22,6 +22,7 @@ from pathlib import Path
 from agents.pm import PMAgent, TaskSpec
 from agents.architect import ArchitectAgent, DesignDecision
 from agents.engineer import EngineerAgent, ImplementationAttempt
+from agents.qa import QAAgent, QAResult
 import git_ops
 
 
@@ -33,7 +34,7 @@ class TaskContext:
     design_decision: DesignDecision | None = None
     branch_name: str | None = None
     implementation: ImplementationAttempt | None = None  # holds changed_files + calibration data
-    test_result: object | None = None                              # set by QA (not yet built)
+    qa_result: QAResult | None = None
     review_verdict: str | None = None                              # set by Reviewer (not yet built)
     review_comments: str | None = None
     merged: bool = False                                            # set by DevOps (not yet built)
@@ -105,10 +106,32 @@ def run_pipeline(feature_request: str, repo_dir: str) -> TaskContext:
     git_ops.commit(repo_dir, ctx.task_spec.pr_description)
     print(f"[pipeline] Committed to branch {ctx.branch_name}")
 
-    # --- QA/Reviewer/DevOps stages: not yet built ---
+    qa = QAAgent()
+    ctx.qa_result = qa.test(task_id=task_id, repo_dir=repo_dir)
+    er = ctx.qa_result.execution_result
+    print(f"[pipeline] QA: {er.tests_passed}/{er.tests_collected} passed, "
+          f"pass_fraction={er.pass_fraction:.2f}, succeeded={ctx.qa_result.passed}")
+
+    # Same diagnostic run_benchmark.py already has for exactly this
+    # situation — zero tests collected almost always means the test
+    # harness itself failed to run (import error, discovery mismatch,
+    # missing dependency), not that the code is trivially correct.
+    # pipeline.py never had this check, which is how a real 0/0 result
+    # made it all the way to a printed "succeeded" line unexplained.
+    if er.tests_collected == 0:
+        print("[pipeline] [diagnostic] zero tests collected:")
+        print(f"    exit_code={er.exit_code} timed_out={er.timed_out}")
+        print(f"    stdout: {er.stdout.strip()[:1500]!r}")
+        print(f"    stderr: {er.stderr.strip()[:1500]!r}")
+        print(f"    container_error: {er.container_error!r}")
+
+    # --- Reviewer/DevOps stages: not yet built ---
     print(
-        "[pipeline] Stopping here — QA/Reviewer/DevOps aren't wired in yet "
-        "(next in the build order). PM, Architect, and Engineer ran for "
-        "real; the branch and commit above are real, inspectable state."
+        "[pipeline] Stopping here — Reviewer/DevOps aren't wired in yet "
+        "(next in the build order). PM, Architect, Engineer, and QA all "
+        "ran for real; the branch, commit, and test result above are "
+        "real, inspectable state — this is the first point in Phase 2 "
+        "where a genuine outcome-grounded signal exists for a multi-file "
+        "change, not just a single function."
     )
     return ctx

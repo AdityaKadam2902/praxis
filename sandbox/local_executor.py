@@ -1,43 +1,33 @@
 """
 sandbox/local_executor.py
 
-Fallback for when Docker isn't set up yet. Runs the same pytest command
-executor.py runs, but directly on the host — no container, no network
-isolation, no resource caps, no non-root sandboxing.
+Fallback for when Docker isn't set up. Runs pytest directly on the host —
+no container, no network isolation, no resource caps, no non-root
+sandboxing.
 
-Same ExecutionResult output shape as SandboxExecutor, so run_benchmark.py
-can use either one interchangeably via sandbox/factory.py.
-
-⚠️ Not a substitute for SandboxExecutor long-term. This is safe for running
-YOUR OWN seed tasks (you already trust that code — you wrote it). It stops
-being safe the moment agent-generated code you haven't reviewed runs
-through it, since there's nothing stopping that code from touching the
-network, the filesystem outside the temp dir, or anything else on your
-machine. Switch back to the Docker-based executor before Phase 1+ work
-involves code you haven't read yet.
+⚠️ Not a substitute for SandboxExecutor long-term. Safe for your own
+reviewed seed tasks; stops being safe once agent-generated code you
+haven't reviewed runs through it.
 """
 
 from __future__ import annotations
 
-import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
 from sandbox.result import ExecutionResult
-from sandbox.pytest_output import parse_pytest_output
+from sandbox.pytest_output import parse_pytest_output, check_pytest_available
 
 DEFAULT_TIMEOUT_SECONDS = 30
 
 
 def _coerce_text(value: bytes | str | None) -> str:
     """
-    subprocess.TimeoutExpired.stdout/.stderr are typed as bytes | Any | None
-    since the type checker can't see that text=True was passed to
-    subprocess.run() above — so this handles both cases explicitly instead
-    of relying on an implicit guarantee that could silently break if the
-    subprocess call ever changes.
+    subprocess.TimeoutExpired.stdout/.stderr are typed generically
+    (bytes | Any | None) since the type checker can't see that text=True
+    was passed to subprocess.run() — handles both cases explicitly rather
+    than relying on an implicit guarantee.
     """
     if value is None:
         return ""
@@ -49,6 +39,10 @@ def _coerce_text(value: bytes | str | None) -> str:
 class LocalExecutor:
     def __init__(self, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
         self.timeout_seconds = timeout_seconds
+        # Fail loudly here, at construction, before any task runs or any
+        # LLM API call is made — see pytest_output.py's module docstring
+        # for the real incident that made this necessary.
+        check_pytest_available()
 
     def run(
         self,
@@ -58,7 +52,10 @@ class LocalExecutor:
         solution_filename: str = "solution.py",
         test_filename: str = "test_solution.py",
     ) -> ExecutionResult:
-        work_dir = Path(tempfile.mkdtemp(prefix=f"praxis_local_{task_id}_"))
+        import shutil
+        import tempfile
+
+        work_dir = Path(tempfile.mkdtemp(prefix=f"praxis_{task_id}_"))
         start = time.monotonic()
 
         try:
@@ -97,7 +94,7 @@ class LocalExecutor:
                 timed_out=timed_out,
             )
 
-        except Exception as exc:  # noqa: BLE001 — mirror executor.py's fail-safe behavior
+        except Exception as exc:  # noqa: BLE001 — fail-safe for anything else unexpected
             return ExecutionResult(
                 task_id=task_id,
                 exit_code=None,

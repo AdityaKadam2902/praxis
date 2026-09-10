@@ -1,14 +1,10 @@
 """
 sandbox/result.py
 
-ExecutionResult and SANDBOX_IMAGE used to live in executor.py, which
-imports the `docker` package at module level. That meant local_executor.py
-and repo_local.py — neither of which touches Docker at all — couldn't
-even import ExecutionResult without the `docker` pip package installed.
-Splitting this out removes that unnecessary coupling: the two Docker
-executors (executor.py, repo_executor.py) still import `docker` for
-their own use; the two local executors (local_executor.py, repo_local.py)
-now depend on nothing but the standard library plus this file.
+ExecutionResult and SANDBOX_IMAGE, kept separate from executor.py (which
+imports the `docker` package at module level) so local_executor.py and
+repo_local.py — neither of which touches Docker — don't need the
+`docker` pip package installed just to import a dataclass.
 """
 
 from __future__ import annotations
