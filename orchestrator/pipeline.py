@@ -23,6 +23,8 @@ from agents.pm import PMAgent, TaskSpec
 from agents.architect import ArchitectAgent, DesignDecision
 from agents.engineer import EngineerAgent, ImplementationAttempt
 from agents.qa import QAAgent, QAResult
+from agents.reviewer import ReviewerAgent, ReviewResult
+from agents.devops import DevOpsAgent, DevOpsResult
 import git_ops
 
 
@@ -35,9 +37,8 @@ class TaskContext:
     branch_name: str | None = None
     implementation: ImplementationAttempt | None = None  # holds changed_files + calibration data
     qa_result: QAResult | None = None
-    review_verdict: str | None = None                              # set by Reviewer (not yet built)
-    review_comments: str | None = None
-    merged: bool = False                                            # set by DevOps (not yet built)
+    review: ReviewResult | None = None
+    devops: DevOpsResult | None = None
 
 
 def _read_repo_context(repo_dir: str, max_chars: int = 4000) -> str:
@@ -125,13 +126,26 @@ def run_pipeline(feature_request: str, repo_dir: str) -> TaskContext:
         print(f"    stderr: {er.stderr.strip()[:1500]!r}")
         print(f"    container_error: {er.container_error!r}")
 
-    # --- Reviewer/DevOps stages: not yet built ---
-    print(
-        "[pipeline] Stopping here — Reviewer/DevOps aren't wired in yet "
-        "(next in the build order). PM, Architect, Engineer, and QA all "
-        "ran for real; the branch, commit, and test result above are "
-        "real, inspectable state — this is the first point in Phase 2 "
-        "where a genuine outcome-grounded signal exists for a multi-file "
-        "change, not just a single function."
+    reviewer = ReviewerAgent()
+    qa_summary = f"{er.tests_passed}/{er.tests_collected} passed"
+    ctx.review = reviewer.review(
+        task_id=task_id,
+        repo_dir=repo_dir,
+        qa_passed=ctx.qa_result.passed,
+        qa_summary=qa_summary,
     )
+    print(f"[pipeline] Reviewer verdict: {ctx.review.verdict} — {ctx.review.comments}")
+
+    if ctx.review.verdict != "approve":
+        print("[pipeline] Stopping here — Reviewer did not approve. DevOps does not run on unapproved changes.")
+        return ctx
+
+    devops = DevOpsAgent()
+    ctx.devops = devops.merge(task_id=task_id, repo_dir=repo_dir, branch_name=ctx.branch_name)
+    if ctx.devops.merged:
+        print(f"[pipeline] DevOps merged {ctx.branch_name} into main. "
+              f"Pipeline complete — this task went through all six agents for real.")
+    else:
+        print(f"[pipeline] DevOps merge FAILED: {ctx.devops.error}")
+
     return ctx

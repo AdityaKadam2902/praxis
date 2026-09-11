@@ -69,5 +69,9 @@ class ArchitectAgent:
         """
         candidates = _PY_FILE_RE.findall(decision_text)
         known_files = set(_PY_FILE_RE.findall(repo_context))
-        matched = [f for f in candidates if f in known_files]
+        # dict.fromkeys dedupes while preserving first-seen order — a
+        # filename mentioned twice in the decision text (e.g. once per
+        # numbered point) shouldn't appear twice in this list, as seen
+        # in a real run: target_files=['app/calculator.py', 'app/calculator.py'].
+        matched = list(dict.fromkeys(f for f in candidates if f in known_files))
         return matched if matched else sorted(known_files)

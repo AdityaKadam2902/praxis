@@ -68,6 +68,10 @@ def main() -> None:
             er = ctx.qa_result.execution_result
             print(f"QA: {er.tests_passed}/{er.tests_collected} passed, "
                   f"succeeded={ctx.qa_result.passed}")
+        if ctx.review:
+            print(f"Review: {ctx.review.verdict} — {ctx.review.comments}")
+        if ctx.devops:
+            print(f"DevOps: merged={ctx.devops.merged}" + (f" error={ctx.devops.error}" if ctx.devops.error else ""))
         print(f"\nWorking copy left in place for inspection: {work_dir}")
         print("(not cleaned up automatically — delete it manually when done reviewing)")
 

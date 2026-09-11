@@ -45,4 +45,16 @@ class ExecutionResult:
 
     @property
     def succeeded(self) -> bool:
+        """
+        Real bug found in Phase 2: this property never checked
+        tests_collected, so a run where pytest exits 0 with zero tests
+        actually collected (e.g. an import error pytest itself tolerates,
+        or a test-discovery mismatch) reported succeeded=True — QAAgent
+        uses this property directly, so that misleadingly marked a task
+        as passed when nothing was actually verified. pass_fraction
+        already guarded against this; succeeded now matches that same
+        reasoning instead of silently disagreeing with it.
+        """
+        if self.tests_collected == 0:
+            return False
         return self.exit_code == 0 and not self.timed_out and not self.container_error

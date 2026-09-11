@@ -21,8 +21,18 @@ import re
 import subprocess
 
 # pytest's short summary line looks like: "2 passed, 1 failed in 0.03s"
+# Real bug found in Phase 2: the first group had no `.*?` prefix, unlike
+# the other two — since all three groups are optional and none require
+# consuming characters, .search() found a trivially "successful" empty
+# match at position 0 before ever reaching "N passed" later in the
+# string (which comes after a line of progress dots like "........
+# [100%]"). Confirmed against a real run that showed "8 passed in
+# 0.10s" but got parsed as 0/0 collected. Adding the same .*? prefix
+# used by the other two groups fixes it without changing behavior on
+# any previously-working output shape (verified against Phase 0's
+# historical single-line formats).
 _PYTEST_SUMMARY_RE = re.compile(
-    r"(?:(?P<passed>\d+) passed)?"
+    r"(?:.*?(?P<passed>\d+) passed)?"
     r"(?:.*?(?P<failed>\d+) failed)?"
     r"(?:.*?(?P<errors>\d+) error)?",
     re.DOTALL,
