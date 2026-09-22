@@ -65,6 +65,16 @@ class GroqProvider(Provider):
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
+                # Nudge temperature up slightly on each retry. Real
+                # incident: a reasoning model got stuck in a literal
+                # repetition loop ("Ok.\nStop.\nOk.\nStop." repeated
+                # hundreds of times) and hit finish_reason="length" with
+                # empty content — no max_tokens value fixes a model that
+                # never converges. Retrying at the exact same temperature
+                # risks reproducing the same loop; a small bump gives the
+                # retry a genuinely different sampling path to escape it.
+                temperature = min(0.2 + attempt * 0.15, 0.8)
+
                 response = self.client.post(
                     "/chat/completions",
                     json={
@@ -73,22 +83,12 @@ class GroqProvider(Provider):
                             {"role": "system", "content": system},
                             {"role": "user", "content": prompt},
                         ],
-                        "temperature": 0.2,
-                        # Real incident: openai/gpt-oss-20b is a reasoning
-                        # model that spends tokens on an internal
-                        # "reasoning" field before producing "content" —
-                        # with no max_tokens set (Groq's default applied),
-                        # a verbose reasoning trace exhausted the entire
-                        # budget and returned finish_reason="length" with
-                        # completely empty content. Setting this
-                        # generously gives room for both.
+                        "temperature": temperature,
                         "max_tokens": 4096,
                     },
                 )
 
                 if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
-                    # Honor Groq's Retry-After header if present, otherwise
-                    # exponential backoff (2s, 4s, 8s, 16s).
                     retry_after = response.headers.get("retry-after")
                     delay = float(retry_after) if retry_after else _BASE_BACKOFF_SECONDS * (2 ** attempt)
                     print(
@@ -102,19 +102,28 @@ class GroqProvider(Provider):
                 data = response.json()
                 choice = data["choices"][0]
                 text = choice["message"]["content"]
+                finish_reason = choice.get("finish_reason")
+
+                if (not text or not text.strip()) and attempt < _MAX_RETRIES:
+                    # Second real incident of this shape: this time a
+                    # genuine repetition loop, not just an under-sized
+                    # token budget. Retryable the same way a 429 is —
+                    # PM/Architect/Reviewer/DevOps have no revision loop
+                    # of their own (only Engineer does), so without this
+                    # living here, any of them hitting this dead-ends the
+                    # whole pipeline with no recovery path.
+                    print(
+                        f"[groq] Empty content on attempt {attempt + 1}/{_MAX_RETRIES + 1} "
+                        f"(finish_reason={finish_reason!r}) — retrying at temperature={temperature + 0.15:.2f}"
+                    )
+                    continue
 
                 if not text or not text.strip():
-                    # Real incident: Groq returned HTTP 200 with a
-                    # genuinely empty content string, which crashed
-                    # reviewer.py's parsing silently (no error, just
-                    # nothing to parse). Surface finish_reason and the
-                    # raw choice so this is diagnosable instead of a
-                    # repeat of the "silent 0/0" pattern this project
-                    # has hit more than once already.
+                    # Exhausted retries and still empty — surface full
+                    # diagnostic detail rather than silently returning "".
                     print(
-                        f"[groq] WARNING: empty content in response. "
-                        f"finish_reason={choice.get('finish_reason')!r} "
-                        f"full_choice={choice!r}"
+                        f"[groq] WARNING: empty content after {_MAX_RETRIES + 1} attempts. "
+                        f"finish_reason={finish_reason!r} full_choice={choice!r}"
                     )
 
                 return GenerationResponse(text=text, model_used=model, network_call=True)
@@ -123,15 +132,32 @@ class GroqProvider(Provider):
                 last_exception = exc
                 if exc.response.status_code not in _RETRYABLE_STATUS_CODES or attempt >= _MAX_RETRIES:
                     raise
-                # Retryable but raise_for_status already threw — shouldn't
-                # normally reach here given the check above, but handles
-                # the case defensively rather than assuming the ordering
-                # always holds.
                 delay = _BASE_BACKOFF_SECONDS * (2 ** attempt)
                 time.sleep(delay)
 
-        # Exhausted all retries — raise the last real error rather than a
-        # generic one, so the caller sees exactly what Groq returned.
+            except httpx.TransportError as exc:
+                # Real incident: httpx.ConnectError ("[WinError 10054] An
+                # existing connection was forcibly closed by the remote
+                # host") crashed the pipeline outright — this is a
+                # network-level error, not an HTTP status error, so the
+                # except clause above never caught it at all. httpx.TransportError
+                # is the base class covering ConnectError, ReadTimeout,
+                # WriteTimeout, PoolTimeout, RemoteProtocolError, etc. —
+                # all genuinely transient conditions worth retrying, most
+                # likely here a stale keep-alive connection on a
+                # long-lived client reused across many requests. httpx
+                # opens a fresh connection on the next attempt
+                # automatically.
+                last_exception = exc
+                if attempt >= _MAX_RETRIES:
+                    raise
+                delay = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+                print(
+                    f"[groq] Network error on attempt {attempt + 1}/{_MAX_RETRIES + 1} "
+                    f"({type(exc).__name__}: {exc}) — retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+
         if last_exception:
             raise last_exception
         raise RuntimeError("Groq request failed after retries with no captured exception.")
