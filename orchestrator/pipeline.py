@@ -2,15 +2,9 @@
 orchestrator/pipeline.py
 
 Sequential orchestration for the Phase 2 agent chain — direct function
-calls through a shared TaskContext, not Redis pub/sub. Per the build
-spec section 3: pub/sub earns its complexity when agents are separate
-concurrent services, which Phase 2 doesn't have yet. This is the same
-execution model as Phase 0's benchmark/run_benchmark.py, just extended
-to six stages instead of one.
-
-Currently wires PM -> Architect. Engineer/QA/Reviewer/DevOps stages are
-explicit placeholders (raise NotImplementedError) rather than silently
-skipped — next in the build order, not yet built.
+calls through a shared TaskContext, not Redis pub/sub (build spec
+section 3: pub/sub earns its complexity when agents are separate
+concurrent services, which Phase 2 doesn't have).
 """
 
 from __future__ import annotations
@@ -35,20 +29,13 @@ class TaskContext:
     task_spec: TaskSpec | None = None
     design_decision: DesignDecision | None = None
     branch_name: str | None = None
-    implementation: ImplementationAttempt | None = None  # holds changed_files + calibration data
+    implementation: ImplementationAttempt | None = None
     qa_result: QAResult | None = None
     review: ReviewResult | None = None
     devops: DevOpsResult | None = None
 
 
 def _read_repo_context(repo_dir: str, max_chars: int = 4000) -> str:
-    """
-    Flatten the repo's .py files into a single string for Architect to
-    read. Simple and crude by design for Phase 2's small seed repo —
-    revisit (e.g. only include files relevant to the task) if/when a
-    larger seed repo makes the full-dump approach too slow or too big for
-    the model's context.
-    """
     chunks = []
     total = 0
     for py_file in sorted(Path(repo_dir).rglob("*.py")):
@@ -65,13 +52,6 @@ def _read_repo_context(repo_dir: str, max_chars: int = 4000) -> str:
 
 
 def run_pipeline(feature_request: str, repo_dir: str) -> TaskContext:
-    """
-    repo_dir must already be a cloned+branched working copy — this
-    function doesn't call git_ops.clone_seed_repo/create_branch itself,
-    since branch creation happens after PM has scoped the task (needs
-    task_id for the branch name), not before. Caller sets up the repo,
-    this orchestrates the agent chain against it.
-    """
     task_id = str(uuid.uuid4())[:8]
     ctx = TaskContext(task_id=task_id, feature_request=feature_request)
 
@@ -87,17 +67,12 @@ def run_pipeline(feature_request: str, repo_dir: str) -> TaskContext:
     print(f"[pipeline] decision: {ctx.design_decision.decision_text}")
 
     engineer = EngineerAgent()
-    ctx.implementation = engineer.implement(ctx.task_spec, ctx.design_decision, repo_context)
+    ctx.implementation = engineer.implement(ctx.task_spec, ctx.design_decision, repo_context, repo_dir)
     print(f"[pipeline] Engineer ({ctx.implementation.model_used}) produced "
           f"{len(ctx.implementation.changed_files)} file(s), "
           f"verbalized_confidence={ctx.implementation.verbalized_confidence:.2f}")
 
     if not ctx.implementation.changed_files:
-        # implement()'s own revision loop already tried to recover from
-        # this; if it still comes back empty after max_revisions, don't
-        # pretend there's something to commit — surface it plainly rather
-        # than committing an empty change and letting QA/Reviewer deal
-        # with a silently-nonexistent diff.
         print("[pipeline] WARNING: Engineer produced no parseable file changes after revisions. Stopping here.")
         return ctx
 
@@ -113,12 +88,6 @@ def run_pipeline(feature_request: str, repo_dir: str) -> TaskContext:
     print(f"[pipeline] QA: {er.tests_passed}/{er.tests_collected} passed, "
           f"pass_fraction={er.pass_fraction:.2f}, succeeded={ctx.qa_result.passed}")
 
-    # Same diagnostic run_benchmark.py already has for exactly this
-    # situation — zero tests collected almost always means the test
-    # harness itself failed to run (import error, discovery mismatch,
-    # missing dependency), not that the code is trivially correct.
-    # pipeline.py never had this check, which is how a real 0/0 result
-    # made it all the way to a printed "succeeded" line unexplained.
     if er.tests_collected == 0:
         print("[pipeline] [diagnostic] zero tests collected:")
         print(f"    exit_code={er.exit_code} timed_out={er.timed_out}")
