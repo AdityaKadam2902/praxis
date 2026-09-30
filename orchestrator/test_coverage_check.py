@@ -59,6 +59,23 @@ def _is_test_file(path: str) -> bool:
     return filename.startswith("test_") or "/tests/" in path.replace("\\", "/")
 
 
+def is_test_only_output(changed_files: dict[str, str]) -> bool:
+    """
+    True if Engineer's output contains only test file(s) and zero source
+    files — added after two real, repeated incidents where a heavily
+    retried call (multiple 429s / empty-content loops in a row) produced
+    exactly one lone test file (test_parser.py once, test_ui.py once)
+    with no corresponding implementation at all. QA correctly caught
+    both as 0/N passed and Reviewer correctly auto-rejected them, but
+    only after the full pipeline ran and wasted the QA/Reviewer calls —
+    catching this here, in Engineer's own revision loop, is cheaper and
+    faster than waiting for QA to notice the same thing.
+    """
+    if not changed_files:
+        return False
+    return all(_is_test_file(path) for path in changed_files)
+
+
 def find_untested_new_functions(
     repo_dir: str,
     changed_files: dict[str, str],

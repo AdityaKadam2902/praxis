@@ -19,7 +19,7 @@ from calibration.verbalized import extract_verbalized_confidence, strip_confiden
 from providers.base import Provider
 from providers.factory import get_provider
 from routing import select_model_for_task
-from test_coverage_check import find_untested_new_functions
+from test_coverage_check import find_untested_new_functions, is_test_only_output
 
 # Phase 0's original task-type -> baseline expected solve time, used by
 # behavioral.py's time signal.
@@ -184,9 +184,16 @@ class EngineerAgent:
         conf = extract_verbalized_confidence(raw_response)
         changed_files = self._parse_files(raw_response)
         missing_coverage = find_untested_new_functions(repo_dir, changed_files) if changed_files else []
+        test_only = is_test_only_output(changed_files)
 
-        while (conf.normalized < 0.5 or not changed_files or missing_coverage) and revision_count < max_revisions:
-            if missing_coverage and changed_files:
+        while (conf.normalized < 0.5 or not changed_files or missing_coverage or test_only) and revision_count < max_revisions:
+            if test_only:
+                nudge = (
+                    "\n\nYour previous attempt only produced test file(s) with no "
+                    "corresponding source/implementation file — likely an incomplete "
+                    "response. You must include the actual implementation, not just tests."
+                )
+            elif missing_coverage and changed_files:
                 names = ", ".join(f"{path}::{name}" for path, name in missing_coverage)
                 nudge = (
                     f"\n\nYou introduced new function(s)/class(es) with no test "
@@ -202,6 +209,7 @@ class EngineerAgent:
             conf = extract_verbalized_confidence(raw_response)
             changed_files = self._parse_files(raw_response)
             missing_coverage = find_untested_new_functions(repo_dir, changed_files) if changed_files else []
+            test_only = is_test_only_output(changed_files)
             revision_count += 1
 
         elapsed = time.monotonic() - start
