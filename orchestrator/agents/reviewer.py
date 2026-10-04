@@ -5,12 +5,29 @@ Reviewer agent — fifth stage. Reads the real diff (via
 git_ops.diff_against) and QA's real test result, and decides whether to
 approve or request changes.
 
-Key design choice: if QA didn't pass, this agent auto-rejects WITHOUT
-even calling the model — a structural guarantee that failing tests can
-never be approved, rather than trusting a system prompt instruction to
-always be honored. Same principle as qa.py and calibration/outcome.py:
-keep ground-truth decisions out of the model's hands wherever a hard
-rule can enforce them directly instead.
+Two hard-won design properties:
+
+1. If QA didn't pass, this agent auto-rejects WITHOUT even calling the
+   model — a structural guarantee that failing tests can never be
+   approved, rather than trusting a system prompt instruction to always
+   be honored.
+
+2. If QA DID pass, the model is explicitly told so and told to weigh
+   that as real evidence — added after two real, back-to-back false
+   rejections: once a flat-out hallucinated claim ("require_numbers is
+   undefined" when it was correctly imported and used exactly like every
+   other function in the file), once a hedged-but-still-wrong worry
+   ("this may not be enforced" about a check that was already correct
+   and already executing successfully). Both claims were of a kind QA's
+   real execution would have caught if true — a genuine NameError or an
+   unenforced check failing at runtime shows up as a QA failure, not a
+   pass. Reviewer previously had no awareness that QA already ran the
+   actual code successfully; it was reasoning about the diff in a
+   vacuum, disconnected from evidence sitting right next to it in the
+   pipeline. This doesn't make Reviewer's judgment perfect, but it
+   directly targets the demonstrated failure pattern rather than
+   open-endedly parsing and re-verifying arbitrary natural-language
+   claims, which would be far more fragile to build.
 """
 
 from __future__ import annotations
@@ -23,11 +40,16 @@ from providers.factory import get_provider
 import git_ops
 
 SYSTEM_PROMPT = """You are a code reviewer. You will be given a diff and \
-the result of running the test suite (which already passed — you are only \
-called when it did). Review the diff itself for obvious problems: unused \
-imports, missing input validation compared to the rest of the file, \
-overly broad exception handling, or anything that contradicts the stated \
-task. Output exactly two fields, each on its own line:
+the result of running the test suite — the test suite ALREADY EXECUTED \
+THIS EXACT CODE and it passed. That is real, direct evidence: if the \
+code had an undefined name, a missing import, a NameError, or a check \
+that silently failed to run, the test suite would have caught it as a \
+failure, not a pass. Do not claim the code will crash, raise an \
+undefined-name error, or fail to execute — the test run already proves \
+otherwise. Focus instead on what the test run can't tell you: code \
+style, missing edge-case tests, redundant logic, design concerns, or \
+whether the diff actually matches what the task asked for. Output \
+exactly two fields, each on its own line:
 
 VERDICT: <approve or request_changes>
 COMMENTS: <1-3 sentences explaining your verdict>
@@ -77,7 +99,10 @@ class ReviewerAgent:
                 comments="Auto-rejected: diff is empty, nothing to review.",
             )
 
-        prompt = f"Test result: {qa_summary}\n\nDiff:\n{diff}"
+        prompt = (
+            f"Test result: {qa_summary} — ALL TESTS PASSED, this code ran "
+            f"successfully for real.\n\nDiff:\n{diff}"
+        )
         response = self.provider.generate(
             model=self.provider.fast_model_name(),
             system=SYSTEM_PROMPT,
@@ -86,15 +111,8 @@ class ReviewerAgent:
         return self._parse(task_id, response.text)
 
     def _parse(self, task_id: str, raw_text: str) -> ReviewResult:
-        """Separated from review() for testability without a live LLM call,
-        same pattern used throughout the agent files."""
         match = _VERDICT_RE.search(raw_text)
         if not match:
-            # Same lesson as every other silent-failure incident in this
-            # project (QA's charmap error, the missing-pytest incident,
-            # the pytest_output.py regex bug): never fail closed without
-            # showing the actual raw text that caused it. Truncated to
-            # keep it readable in the pipeline's console output.
             print(f"[reviewer] [diagnostic] response did not match expected format:")
             print(f"    {raw_text.strip()[:800]!r}")
             return ReviewResult(
@@ -104,7 +122,7 @@ class ReviewerAgent:
             )
         verdict = match.group("verdict").strip().lower()
         if verdict not in _VALID_VERDICTS:
-            verdict = "request_changes"  # fail closed on out-of-vocabulary too
+            verdict = "request_changes"
         return ReviewResult(
             task_id=task_id,
             verdict=verdict,

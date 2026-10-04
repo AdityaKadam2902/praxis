@@ -5,12 +5,18 @@ Architect agent — second stage. Takes the PM's TaskSpec plus a snapshot
 of the relevant repo context and produces a design decision: which
 file(s) to touch and the approach to take.
 
-Output is plain text for Phase 2 — not written to Kuzu as a queryable
-ADR yet. That's a deliberate scope decision (build spec section 5): an
-architectural decision has no clean ground-truth signal the way
-code-against-tests does, so extending calibration to it now would mean
-inventing a fake outcome signal. Revisit once Phase 3's ADR graph exists
-and a decision that later gets reverted becomes a real, gradable outcome.
+Scope-discipline instruction added after a consistent, repeated pattern
+across nearly every run this session: for a request that only ever said
+"add exponentiation support," Architect repeatedly decided that meant
+inventing a tokenizer/parser module, an evaluator, operator precedence
+tables, and a UI layer — none of which were asked for and none of which
+exist in the seed repo. This wasn't a rare misfire; it was the default.
+It also wasn't harmless: the runs with the worst retry storms (multiple
+429s, empty-content loops, temperature bumps) were exactly the ones
+where Architect's decision was this large, since a bigger decision means
+a bigger Engineer response, which means more token/rate-limit pressure.
+Fixing the root scope discipline is expected to reduce how often the
+downstream resilience logic even needs to fire.
 """
 
 from __future__ import annotations
@@ -24,10 +30,26 @@ from agents.pm import TaskSpec
 
 SYSTEM_PROMPT = """You are a software architect. Given a scoped task and \
 the current contents of the relevant repo files, decide which file(s) \
-need to change and describe the approach in 2-4 sentences. Be specific \
-about function/class names that should be added or modified. Do not \
-write code — that's the Engineer's job. Output ONLY the design decision \
-text, nothing else."""
+need to change and describe the approach in 2-4 sentences.
+
+SCOPE DISCIPLINE — this is a hard constraint, not a suggestion: decide \
+the SMALLEST change that satisfies the literal task description. Do \
+NOT invent new modules, parsers, tokenizers, evaluators, UI layers, or \
+any other functionality that was not explicitly asked for, even if you \
+can imagine how it might eventually be useful. Only propose a new file \
+if the task cannot be accomplished by modifying an existing one.
+
+Concrete example of what NOT to do: if the task says "add exponentiation \
+support to the calculator," the correct scope is "add one power(a, b) \
+function to the existing calculator file." It is NOT correct to also \
+design a new expression parser, operator precedence table, tokenizer, \
+or UI button — none of that was requested, and the repo context will \
+show you whether such things even exist yet. If they don't exist, that \
+is a signal they're out of scope, not an invitation to create them.
+
+Be specific about function/class names that should be added or \
+modified. Do not write code — that's the Engineer's job. Output ONLY \
+the design decision text, nothing else."""
 
 _PY_FILE_RE = re.compile(r"[\w./]+\.py")
 
@@ -61,17 +83,12 @@ class ArchitectAgent:
         """
         Best-effort extraction of filenames mentioned in the decision
         text, cross-checked against filenames that actually appear in
-        repo_context — so a hallucinated filename doesn't get treated as
-        a real target. Engineer still receives the full decision_text
-        regardless; this is a convenience list, not the source of truth,
-        so a wrong guess here doesn't block the pipeline, just makes
-        Engineer's job slightly less pre-scoped.
+        repo_context so a hallucinated filename doesn't get treated as a
+        real target. dict.fromkeys dedupes while preserving order — a
+        filename mentioned twice in the decision text shouldn't appear
+        twice in this list (observed in a real run).
         """
         candidates = _PY_FILE_RE.findall(decision_text)
         known_files = set(_PY_FILE_RE.findall(repo_context))
-        # dict.fromkeys dedupes while preserving first-seen order — a
-        # filename mentioned twice in the decision text (e.g. once per
-        # numbered point) shouldn't appear twice in this list, as seen
-        # in a real run: target_files=['app/calculator.py', 'app/calculator.py'].
         matched = list(dict.fromkeys(f for f in candidates if f in known_files))
         return matched if matched else sorted(known_files)
